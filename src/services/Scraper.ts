@@ -14,14 +14,52 @@ export default class Scraper {
       "--no-first-run",
       "--no-zygote",
       "--disable-gpu",
+      "--single-process", // ← ADD THIS for Render
     ],
   };
 
   async start(link: string) {
     try {
       console.log(`🚀 Starting browser for: ${link}`);
+
+      // Use ScraperAPI directly for Render
+      this.browser = await puppeteer.launch(this.browserOptions);
+      this.page = await this.browser.newPage();
+
+      // Route through ScraperAPI instead of direct connection
+      const scraperApiUrl = `https://api.scraperapi.com?api_key=80dd264b47f09639597483cd7eae2844&url=${encodeURIComponent(
+        link
+      )}&render=true`;
+
+      await this.page.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+      );
+      await this.page.setViewport({ width: 1920, height: 1080 });
+
+      await this.page.goto(scraperApiUrl, {
+        waitUntil: "networkidle2",
+        timeout: 60000,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      console.log(`✅ Successfully loaded: ${link}`);
+    } catch (error) {
+      console.error(`❌ Failed to start browser for ${link}:`, error);
+      await this.close();
+      throw error;
+    }
+  }
+
+  // Alternative approach: Use ScraperAPI directly without Puppeteer
+  async startWithDirectAPI(link: string) {
+    try {
+      console.log(`🚀 Starting browser for: ${link} using direct API`);
+
+      // Use ScraperAPI's browser automation endpoint
+      const scraperApiWsEndpoint = `wss://async.scraperapi.com?api_key=80dd264b47f09639597483cd7eae2844`;
+
       this.browser = await puppeteer.connect({
-        browserWSEndpoint: `wss://scraperapi.com?api_key=80dd264b47f09639597483cd7eae2844&browser=chrome`,
+        browserWSEndpoint: scraperApiWsEndpoint,
       });
 
       this.page = await this.browser.newPage();
@@ -49,8 +87,57 @@ export default class Scraper {
     }
   }
 
+  // Option 3: Use local Puppeteer with ScraperAPI for specific requests
+  async startLocal(link: string) {
+    try {
+      console.log(`🚀 Starting local browser for: ${link}`);
+
+      this.browser = await puppeteer.launch(this.browserOptions);
+      this.page = await this.browser.newPage();
+
+      // Set user agent to avoid being blocked
+      await this.page.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+      );
+
+      // Set viewport
+      await this.page.setViewport({ width: 1920, height: 1080 });
+
+      // Try direct connection first, fallback to ScraperAPI if blocked
+      try {
+        await this.page.goto(link, {
+          waitUntil: "networkidle2",
+          timeout: 30000,
+        });
+        console.log(`✅ Successfully loaded directly: ${link}`);
+      } catch (directError) {
+        console.log(
+          `⚠️ Direct connection failed, trying ScraperAPI: ${directError}`
+        );
+
+        // Fallback to ScraperAPI
+        const scraperApiUrl = `https://api.scraperapi.com?api_key=80dd264b47f09639597483cd7eae2844&url=${encodeURIComponent(
+          link
+        )}&render=true`;
+
+        await this.page.goto(scraperApiUrl, {
+          waitUntil: "networkidle2",
+          timeout: 60000,
+        });
+        console.log(`✅ Successfully loaded via ScraperAPI: ${link}`);
+      }
+
+      // Wait a bit more for dynamic content
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    } catch (error) {
+      console.error(`❌ Failed to start browser for ${link}:`, error);
+      await this.close(); // Clean up on failure
+      throw error;
+    }
+  }
+
   async scrapeCompleteMovieData(link: string) {
-    await this.start(link);
+    await this.startLocal(link); // Use the more reliable local method
     if (!this.page) throw new Error("Page not initialized");
 
     try {
@@ -123,7 +210,7 @@ export default class Scraper {
 
   async scrapeTrending(link: string) {
     try {
-      await this.start(link);
+      await this.startLocal(link); // Use the more reliable local method
 
       if (!this.page) {
         throw new Error("Page not initialized");
@@ -277,6 +364,7 @@ export default class Scraper {
     }
   }
 
+  // Rest of your methods remain the same...
   async scrapePoster() {
     if (!this.page) throw new Error("Page not loaded. Call start first.");
 
