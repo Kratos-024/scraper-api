@@ -4,16 +4,10 @@ export default class Scraper {
   browser: Browser | null = null;
   page: Page | null = null;
 
-  // Updated browser options for Render deployment
+  // Updated browser options specifically for Render
   browserOptions = {
     headless: true,
-    // Make executablePath optional and properly typed
-    ...(process.env.NODE_ENV === "production"
-      ? {
-          executablePath:
-            "/opt/render/.cache/puppeteer/chrome/linux-*/chrome-linux*/chrome",
-        }
-      : {}),
+    // Remove executablePath completely - let Puppeteer find it automatically
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -37,24 +31,11 @@ export default class Scraper {
       console.log(`🚀 Starting browser for: ${link}`);
       console.log(`🔍 Environment: ${process.env.NODE_ENV}`);
 
-      // Try to launch browser with fallback options
-      try {
-        this.browser = await puppeteer.launch(this.browserOptions);
-      } catch (launchError) {
-        console.warn(
-          "⚠️ Failed to launch with configured options, trying fallback:",
-          launchError
-        );
-
-        // Fix: Use proper spread instead of delete
-        const { executablePath, ...fallbackOptions } = this.browserOptions;
-
-        this.browser = await puppeteer.launch(fallbackOptions);
-      }
-
+      // Simple launch - let Puppeteer handle Chrome location
+      this.browser = await puppeteer.launch(this.browserOptions);
       this.page = await this.browser.newPage();
 
-      // Route through ScraperAPI instead of direct connection
+      // Route through ScraperAPI
       const scraperApiUrl = `https://api.scraperapi.com?api_key=80dd264b47f09639597483cd7eae2844&url=${encodeURIComponent(
         link
       )}&render=true`;
@@ -78,7 +59,7 @@ export default class Scraper {
     }
   }
 
-  // Alternative method with better error handling
+  // Simplified retry method with better strategies for Render
   async startWithRetry(link: string, maxRetries: number = 3) {
     let lastError: Error | null = null;
 
@@ -88,12 +69,12 @@ export default class Scraper {
           `🚀 Attempt ${attempt}/${maxRetries} - Starting browser for: ${link}`
         );
 
-        // Fix: Properly type strategies with conditional executablePath
+        // Progressive fallback strategies specifically for Render
         const strategies = [
-          // Strategy 1: Use configured options (conditionally include executablePath)
+          // Strategy 1: Standard Puppeteer launch (should work with latest version)
           () => puppeteer.launch(this.browserOptions),
 
-          // Strategy 2: Use minimal options
+          // Strategy 2: Minimal args
           () =>
             puppeteer.launch({
               headless: true,
@@ -104,43 +85,59 @@ export default class Scraper {
               ],
             }),
 
-          // Strategy 3: Use system Chrome if available
+          // Strategy 3: Ultra minimal
           () =>
             puppeteer.launch({
               headless: true,
-              executablePath: "/usr/bin/google-chrome",
+              args: ["--no-sandbox"],
+            }),
+
+          // Strategy 4: Try with explicit path (common Render location)
+          () =>
+            puppeteer.launch({
+              headless: true,
+              executablePath:
+                process.env.CHROME_BIN ||
+                "/opt/render/.cache/puppeteer/chrome/linux-*/chrome-linux*/chrome",
               args: ["--no-sandbox", "--disable-setuid-sandbox"],
             }),
         ];
 
         let browserLaunched = false;
 
-        for (const strategy of strategies) {
+        for (let i = 0; i < strategies.length; i++) {
           try {
-            this.browser = await strategy();
+            console.log(
+              `🔄 Trying launch strategy ${i + 1}/${strategies.length}`
+            );
+            //@ts-ignore
+            this.browser = await strategies[i]();
             browserLaunched = true;
             console.log(
-              `✅ Browser launched successfully with strategy ${
-                strategies.indexOf(strategy) + 1
-              }`
+              `✅ Browser launched successfully with strategy ${i + 1}`
             );
             break;
           } catch (strategyError) {
             console.warn(
-              `⚠️ Strategy ${strategies.indexOf(strategy) + 1} failed:`,
-              strategyError
+              `⚠️ Strategy ${i + 1} failed:`,
+              (strategyError as Error).message
             );
+
+            // If it's the last strategy, log more details
+            if (i === strategies.length - 1) {
+              console.error(
+                `❌ All ${strategies.length} strategies failed. Last error details:`,
+                strategyError
+              );
+            }
             continue;
           }
         }
 
-        if (!browserLaunched) {
-          throw new Error("All browser launch strategies failed");
-        }
-
-        // Fix: Add null check for browser
-        if (!this.browser) {
-          throw new Error("Browser is null after launch");
+        if (!browserLaunched || !this.browser) {
+          throw new Error(
+            `All ${strategies.length} browser launch strategies failed`
+          );
         }
 
         this.page = await this.browser.newPage();
@@ -160,7 +157,9 @@ export default class Scraper {
           console.log(`✅ Successfully loaded directly: ${link}`);
         } catch (directError) {
           console.log(
-            `⚠️ Direct connection failed, trying ScraperAPI: ${directError}`
+            `⚠️ Direct connection failed, trying ScraperAPI: ${
+              (directError as Error).message
+            }`
           );
 
           const scraperApiUrl = `https://api.scraperapi.com?api_key=80dd264b47f09639597483cd7eae2844&url=${encodeURIComponent(
@@ -178,7 +177,7 @@ export default class Scraper {
         return; // Success, exit retry loop
       } catch (error) {
         lastError = error as Error;
-        console.error(`❌ Attempt ${attempt} failed:`, error);
+        console.error(`❌ Attempt ${attempt} failed:`, lastError.message);
 
         // Clean up before retrying
         await this.close();
@@ -187,8 +186,10 @@ export default class Scraper {
           break;
         }
 
-        // Wait before retrying
-        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+        // Exponential backoff
+        const delay = 2000 * attempt;
+        console.log(`⏳ Waiting ${delay}ms before retry...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
 
