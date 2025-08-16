@@ -4,8 +4,16 @@ export default class Scraper {
   browser: Browser | null = null;
   page: Page | null = null;
 
+  // Updated browser options for Render deployment
   browserOptions = {
     headless: true,
+    // Make executablePath optional and properly typed
+    ...(process.env.NODE_ENV === "production"
+      ? {
+          executablePath:
+            "/opt/render/.cache/puppeteer/chrome/linux-*/chrome-linux*/chrome",
+        }
+      : {}),
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
@@ -14,16 +22,36 @@ export default class Scraper {
       "--no-first-run",
       "--no-zygote",
       "--disable-gpu",
-      "--single-process", // ← ADD THIS for Render
+      "--single-process",
+      "--disable-features=VizDisplayCompositor",
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+      "--disable-web-security",
+      "--disable-blink-features=AutomationControlled",
     ],
   };
 
   async start(link: string) {
     try {
       console.log(`🚀 Starting browser for: ${link}`);
+      console.log(`🔍 Environment: ${process.env.NODE_ENV}`);
 
-      // Use ScraperAPI directly for Render
-      this.browser = await puppeteer.launch(this.browserOptions);
+      // Try to launch browser with fallback options
+      try {
+        this.browser = await puppeteer.launch(this.browserOptions);
+      } catch (launchError) {
+        console.warn(
+          "⚠️ Failed to launch with configured options, trying fallback:",
+          launchError
+        );
+
+        // Fix: Use proper spread instead of delete
+        const { executablePath, ...fallbackOptions } = this.browserOptions;
+
+        this.browser = await puppeteer.launch(fallbackOptions);
+      }
+
       this.page = await this.browser.newPage();
 
       // Route through ScraperAPI instead of direct connection
@@ -50,94 +78,128 @@ export default class Scraper {
     }
   }
 
-  // Alternative approach: Use ScraperAPI directly without Puppeteer
-  async startWithDirectAPI(link: string) {
-    try {
-      console.log(`🚀 Starting browser for: ${link} using direct API`);
+  // Alternative method with better error handling
+  async startWithRetry(link: string, maxRetries: number = 3) {
+    let lastError: Error | null = null;
 
-      // Use ScraperAPI's browser automation endpoint
-      const scraperApiWsEndpoint = `wss://async.scraperapi.com?api_key=80dd264b47f09639597483cd7eae2844`;
-
-      this.browser = await puppeteer.connect({
-        browserWSEndpoint: scraperApiWsEndpoint,
-      });
-
-      this.page = await this.browser.newPage();
-
-      // Set user agent to avoid being blocked
-      await this.page.setUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-      );
-
-      // Set viewport
-      await this.page.setViewport({ width: 1920, height: 1080 });
-
-      await this.page.goto(link, {
-        waitUntil: "networkidle2",
-        timeout: 60000,
-      });
-
-      // Wait a bit more for dynamic content
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      console.log(`✅ Successfully loaded: ${link}`);
-    } catch (error) {
-      console.error(`❌ Failed to start browser for ${link}:`, error);
-      await this.close(); // Clean up on failure
-      throw error;
-    }
-  }
-
-  // Option 3: Use local Puppeteer with ScraperAPI for specific requests
-  async startLocal(link: string) {
-    try {
-      console.log(`🚀 Starting local browser for: ${link}`);
-
-      this.browser = await puppeteer.launch(this.browserOptions);
-      this.page = await this.browser.newPage();
-
-      // Set user agent to avoid being blocked
-      await this.page.setUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-      );
-
-      // Set viewport
-      await this.page.setViewport({ width: 1920, height: 1080 });
-
-      // Try direct connection first, fallback to ScraperAPI if blocked
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        await this.page.goto(link, {
-          waitUntil: "networkidle2",
-          timeout: 30000,
-        });
-        console.log(`✅ Successfully loaded directly: ${link}`);
-      } catch (directError) {
         console.log(
-          `⚠️ Direct connection failed, trying ScraperAPI: ${directError}`
+          `🚀 Attempt ${attempt}/${maxRetries} - Starting browser for: ${link}`
         );
 
-        // Fallback to ScraperAPI
-        const scraperApiUrl = `https://api.scraperapi.com?api_key=80dd264b47f09639597483cd7eae2844&url=${encodeURIComponent(
-          link
-        )}&render=true`;
+        // Fix: Properly type strategies with conditional executablePath
+        const strategies = [
+          // Strategy 1: Use configured options (conditionally include executablePath)
+          () => puppeteer.launch(this.browserOptions),
 
-        await this.page.goto(scraperApiUrl, {
-          waitUntil: "networkidle2",
-          timeout: 60000,
-        });
-        console.log(`✅ Successfully loaded via ScraperAPI: ${link}`);
+          // Strategy 2: Use minimal options
+          () =>
+            puppeteer.launch({
+              headless: true,
+              args: [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+              ],
+            }),
+
+          // Strategy 3: Use system Chrome if available
+          () =>
+            puppeteer.launch({
+              headless: true,
+              executablePath: "/usr/bin/google-chrome",
+              args: ["--no-sandbox", "--disable-setuid-sandbox"],
+            }),
+        ];
+
+        let browserLaunched = false;
+
+        for (const strategy of strategies) {
+          try {
+            this.browser = await strategy();
+            browserLaunched = true;
+            console.log(
+              `✅ Browser launched successfully with strategy ${
+                strategies.indexOf(strategy) + 1
+              }`
+            );
+            break;
+          } catch (strategyError) {
+            console.warn(
+              `⚠️ Strategy ${strategies.indexOf(strategy) + 1} failed:`,
+              strategyError
+            );
+            continue;
+          }
+        }
+
+        if (!browserLaunched) {
+          throw new Error("All browser launch strategies failed");
+        }
+
+        // Fix: Add null check for browser
+        if (!this.browser) {
+          throw new Error("Browser is null after launch");
+        }
+
+        this.page = await this.browser.newPage();
+
+        // Set user agent and viewport
+        await this.page.setUserAgent(
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        );
+        await this.page.setViewport({ width: 1920, height: 1080 });
+
+        // Try direct connection first, then fallback to ScraperAPI
+        try {
+          await this.page.goto(link, {
+            waitUntil: "networkidle2",
+            timeout: 30000,
+          });
+          console.log(`✅ Successfully loaded directly: ${link}`);
+        } catch (directError) {
+          console.log(
+            `⚠️ Direct connection failed, trying ScraperAPI: ${directError}`
+          );
+
+          const scraperApiUrl = `https://api.scraperapi.com?api_key=80dd264b47f09639597483cd7eae2844&url=${encodeURIComponent(
+            link
+          )}&render=true`;
+
+          await this.page.goto(scraperApiUrl, {
+            waitUntil: "networkidle2",
+            timeout: 60000,
+          });
+          console.log(`✅ Successfully loaded via ScraperAPI: ${link}`);
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        return; // Success, exit retry loop
+      } catch (error) {
+        lastError = error as Error;
+        console.error(`❌ Attempt ${attempt} failed:`, error);
+
+        // Clean up before retrying
+        await this.close();
+
+        if (attempt === maxRetries) {
+          break;
+        }
+
+        // Wait before retrying
+        await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
       }
-
-      // Wait a bit more for dynamic content
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-    } catch (error) {
-      console.error(`❌ Failed to start browser for ${link}:`, error);
-      await this.close(); // Clean up on failure
-      throw error;
     }
+
+    throw new Error(
+      `Failed to start browser after ${maxRetries} attempts. Last error: ${lastError?.message}`
+    );
   }
 
+  // Use the retry method in your main scraping functions
   async scrapeCompleteMovieData(link: string) {
-    await this.startLocal(link); // Use the more reliable local method
+    await this.startWithRetry(link); // Use the retry method instead
     if (!this.page) throw new Error("Page not initialized");
 
     try {
@@ -210,7 +272,7 @@ export default class Scraper {
 
   async scrapeTrending(link: string) {
     try {
-      await this.startLocal(link); // Use the more reliable local method
+      await this.startWithRetry(link); // Use the retry method
 
       if (!this.page) {
         throw new Error("Page not initialized");
@@ -364,7 +426,6 @@ export default class Scraper {
     }
   }
 
-  // Rest of your methods remain the same...
   async scrapePoster() {
     if (!this.page) throw new Error("Page not loaded. Call start first.");
 
