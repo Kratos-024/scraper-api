@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { ScraperController } from "../controllers/ScraperController.js";
 
 const router = Router();
@@ -25,7 +25,7 @@ router.get(
 // );
 
 // Test endpoint
-router.get("/test", (req, res) => {
+router.get("/test", (req: Request, res: Response) => {
   res.json({
     message: "Scraper API is running",
     endpoints: {

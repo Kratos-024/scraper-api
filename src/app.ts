@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 dotenv.config({ path: ".env", debug: true });
 console.log("process.env.SCRAPER_API_KEY", process.env.SCRAPER_API_KEY);
 
-import express from "express";
+import express, { type Request, type Response } from "express";
 import cors from "cors";
 
 import router from "./routes/ScraperRoutes.js";
@@ -35,7 +35,7 @@ app.use((req, res, next) => {
 
 app.use("/api", router);
 
-app.get("/", (req, res) => {
+app.get("/", (req: Request, res: Response) => {
   res.json({
     message: "IMDb Scraper API",
     version: "1.0.0",
@@ -49,7 +49,7 @@ app.get("/", (req, res) => {
 });
 
 // 404 handler
-app.use("*", (req, res) => {
+app.use("*", (req: Request, res: Response) => {
   res.status(404).json({
     error: "Endpoint not found",
     message: `${req.method} ${req.originalUrl} does not exist`,
