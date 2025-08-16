@@ -21,8 +21,9 @@ export default class Scraper {
     try {
       console.log(`🚀 Starting browser for: ${link}`);
       this.browser = await puppeteer.connect({
-        browserWSEndpoint: `wss://chrome.scraperapi.com?api_key=80dd264b47f09639597483cd7eae2844`,
+        browserWSEndpoint: `wss://scraperapi.com?api_key=80dd264b47f09639597483cd7eae2844&browser=chrome`,
       });
+
       this.page = await this.browser.newPage();
 
       // Set user agent to avoid being blocked
